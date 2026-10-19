@@ -1,0 +1,6 @@
+﻿__pycache__/
+*.pyc
+tv-tuneup-*/
+patterns/
+*.mp4
+*.yuv
