@@ -12,6 +12,10 @@ Packages
   Store. System apps return with `cmd package install-existing`.
 - Remove Play Auto Installs or partner apps reinstall themselves.
 - Switch the IME before removing a keyboard.
+- `cmd package uninstall-system-updates <pkg>` frees the Play update stored in /data but **re-enables a
+  disabled package** - immediately `pm disable-user` it again and press HOME to confirm the launcher.
+- Uninstalling preinstalled apps for user 0 frees only their updates/data; the APK stays in the read-only
+  firmware partitions, so storage gains are modest. Set expectations before promising space.
 - Disabling `launcherx` alone makes `setupwraith` the home screen - disable both.
 - `monkey -p <pkg> 1` may not launch Leanback-only apps (e.g. Prime Video). Use their main activity:
   `cmd package resolve-activity --brief <pkg>` or `dumpsys package <pkg> | grep -A1 MAIN`.

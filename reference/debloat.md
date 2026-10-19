@@ -34,8 +34,12 @@ For `review` packages, decide with evidence, not names:
 5. Launcher swap (only with approval) - see below.
 
 ## 4. Launcher swap (removes home-screen ads and frees ~100+ MB RAM)
-Options (Play Store, no ads): **FLauncher** (`me.efesser.flauncher`, open source, lightest) or
-**Projectivy Launcher** (`com.spocky.projengmenu`, more features). Install by opening
+Options (Play Store, no ads): **Projectivy Launcher** (`com.spocky.projengmenu`) or **FLauncher**
+(`me.efesser.flauncher`, open source). Measured on a 1.8 GB Hisense/Vu TV: Projectivy ~71-81 MB PSS vs
+FLauncher (Flutter) ~102-124 MB vs Google TV home ~135 MB - prefer Projectivy on low-RAM TVs, and measure
+(cold start, 60 s idle, 3 samples of `dumpsys meminfo <pkg>`) rather than assume. Projectivy onboarding:
+answer No to usage/crash reporting and notification access; media and TV-listing permissions can be denied
+("Deny and don't ask again"); leave its accessibility service off unless the owner wants its automations. Install by opening
 `market://details?id=<pkg>` with `am start -a android.intent.action.VIEW -d ... -p com.android.vending`,
 screenshot, and press CENTER on **Install**; poll `pm list packages <pkg>`.
 Then, in one step: disable the stock launcher **and** its fallback home
