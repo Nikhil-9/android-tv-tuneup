@@ -2,10 +2,10 @@
 """Helper CLI for the android-tv-tuneup skill. Standard library only.
 
 Every command prints JSON or plain text that Claude reads back. Nothing here changes
-the TV except `apply` (dry run unless --yes), `rollback`, `keys`, and `play`.
+the TV except `apply` and `cleanup` (dry runs unless --yes), `rollback`, `keys`, and `play`.
 
   python tv.py discover                       find Android/Google TVs on the local network
-  python tv.py connect 192.168.1.9            adb connect + authorization status
+  python tv.py connect 192.168.1.50           adb connect + authorization status
   python tv.py info -s HOST:5555              model, RAM, HDR, codecs, eARC, launcher, DNS...
   python tv.py backup -s HOST:5555 -o DIR     snapshot packages, settings, props
   python tv.py audit -s HOST:5555 -o FILE     usage-ranked package audit with suggested actions
@@ -17,6 +17,8 @@ the TV except `apply` (dry run unless --yes), `rollback`, `keys`, and `play`.
   python tv.py playing -s HOST:5555           what is playing: decoder, resolution, audio format
   python tv.py watching -s HOST:5555          is someone watching right now?
   python tv.py play -s HOST:5555 FILE         push a local video and open it in VLC
+  python tv.py cleanup -s HOST:5555 [--stop PKG..] [--remove-vlc] [--disable-adb] [--yes]
+  python tv.py report --before DIR -s HOST:5555   before/after: RAM, storage, packages, processes
 """
 import argparse
 import concurrent.futures
@@ -141,6 +143,12 @@ def cmd_connect(a):
     target = a.host if ":" in a.host else a.host + ":5555"
     out = adb("connect", target, timeout=20)
     state = adb("-s", target, "get-state", timeout=10)
+    if "offline" in state:  # stale link (TV slept / Wi-Fi dropped): drop it and try once more
+        adb("disconnect", target, timeout=10)
+        time.sleep(2)
+        out = adb("connect", target, timeout=20)
+        state = adb("-s", target, "get-state", timeout=10)
+    state = "offline" if "offline" in state else ("unauthorized" if "unauthorized" in state else state)
     hint = {
         "device": "Connected and authorized.",
         "unauthorized": "The TV is showing 'Allow USB debugging?'. Ask the owner to tick 'Always allow' and press Allow.",
@@ -492,7 +500,151 @@ def cmd_play(a):
     emit({"playing": dest, "foreground": focus_window(s)})
 
 
+# ---------------------------------------------------------------- cleanup
+TEST_PATHS = ["/sdcard/Movies/tv-tuneup", "/sdcard/ui.xml", "/sdcard/_tvshot.png"]
+
+
+def cmd_cleanup(a):
+    """Remove everything the tune-up left on the TV; dry run unless --yes."""
+    s = a.serial
+    state = adb("get-state", serial=s, timeout=15).strip()
+    if state != "device":
+        emit({"error": f"TV is '{state or 'unreachable'}', not connected - nothing checked or changed.",
+              "next": "Run `tv.py connect HOST` (TV on, same Wi-Fi), then repeat the cleanup."})
+        return
+    present = [p for p in TEST_PATHS if sh(s, f"ls -d {p} 2>/dev/null").strip() == p]
+    # ad-hoc screenshots / UI dumps left in the storage root during this session (only recent ones,
+    # so files the owner put there earlier are never touched)
+    loose = sh(s, f"find /sdcard/ -maxdepth 1 -type f \\( -name '*.png' -o -name '*.jpg' -o -name '*.xml' \\) "
+                  f"-mmin -{int(a.session_hours * 60)}").split()
+    present += [p for p in loose if p not in present]
+    sizes = {p: (sh(s, f"du -sh {p} 2>/dev/null").split() or ["?"])[0] for p in present}
+    vlc = "package:org.videolan.vlc" in sh(s, "pm list packages org.videolan.vlc").split()
+    watching = "state=3" in sh(s, "dumpsys media_session | grep -E 'state=PlaybackState'")
+    adb_on = sh(s, "settings get global adb_enabled").strip()
+    plan = [f"delete {p} ({sizes[p]})" for p in present]
+    plan += ["drop pattern videos from the media index"] if "/sdcard/Movies/tv-tuneup" in present else []
+    plan += [f"force-stop {p} (opened for testing)" for p in a.stop]
+    if a.remove_vlc and vlc:
+        plan.append("uninstall VLC (installed only for test patterns)")
+    plan += ["trim app caches", "return to the home screen" if not watching else "leave the screen alone (something is playing)"]
+    if a.disable_adb:
+        plan.append("turn OFF USB/network debugging (last step - this ends the connection)")
+    if not a.yes:
+        emit({"dry_run": True, "would_do": plan, "vlc_installed": vlc, "adb_enabled": adb_on,
+              "next": "Confirm with the owner (VLC removal and turning debugging off are their call), then add --yes."})
+        return
+    done = []
+    for p in present:
+        sh(s, f"rm -rf {p}")
+        done.append(f"deleted {p}")
+    if "/sdcard/Movies/tv-tuneup" in present:
+        sh(s, "content delete --uri content://media/external/video/media --where \"_data LIKE '%/Movies/tv-tuneup/%'\"")
+        done.append("media index cleaned")
+    for p in a.stop:
+        sh(s, f"am force-stop {p}")
+        done.append(f"stopped {p}")
+    if a.remove_vlc and vlc:
+        done.append("VLC: " + sh(s, "pm uninstall org.videolan.vlc"))
+    sh(s, "pm trim-caches 999G", timeout=120)
+    done.append("caches trimmed")
+    if not watching:
+        sh(s, "input keyevent KEYCODE_HOME")
+        done.append("home screen")
+    free = sh(s, "df -h /data | tail -1")
+    if a.disable_adb:
+        done.append("debugging turned off - reconnecting will need Developer options again")
+        emit({"cleaned": done, "data_partition": free})
+        sh(s, "settings put global adb_enabled 0")  # connection drops here
+        return
+    emit({"cleaned": done, "data_partition": free, "adb_enabled": adb_on,
+          "reminder": "Network debugging is still on. Offer to turn it off (re-run with --disable-adb --yes) "
+                      "unless the owner wants to keep it for later tuning."})
+
+
 # ---------------------------------------------------------------- main
+# ---------------------------------------------------------------- before/after report
+SNAPSHOT_CMD = ("cat /proc/meminfo; echo ---; df -h /data; echo ---; "
+                "dumpsys meminfo | sed -n '/Total PSS by process/,/Total PSS by OOM/p'")
+
+
+def parse_snapshot(text):
+    """MemTotal/MemAvailable, /data usage and per-process PSS from a meminfo snapshot (backup format)."""
+    def kb(key):
+        m = re.search(rf"{key}:\s+(\d+)\s*kB", text)
+        return round(int(m.group(1)) / 1024) if m else None
+
+    snap = {"ram_total_mb": kb("MemTotal"), "ram_available_mb": kb("MemAvailable")}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 6 and parts[-1].startswith("/data") and parts[1][-1:] in "GMK":
+            snap["data_size"], snap["data_used"], snap["data_free"], snap["data_use_pct"] = parts[1:5]
+            break
+    procs = {}
+    in_pss = False
+    for line in text.splitlines():
+        if "Total PSS by process" in line:
+            in_pss = True
+            continue
+        if in_pss and "Total PSS by OOM" in line:
+            break
+        m = re.match(r"\s*([\d,]+)K: (\S+)", line) if in_pss else None
+        if m:
+            procs[m.group(2)] = round(int(m.group(1).replace(",", "")) / 1024)
+    snap["processes"] = len(procs)
+    snap["pss_total_mb"] = sum(procs.values())
+    return snap, procs
+
+
+def snapshot_from_dir(d):
+    d = Path(d)
+    mem = next((d / n for n in ("meminfo.txt", "baseline_mem.txt") if (d / n).exists()), None)
+    if mem is None:
+        sys.exit(f"{d}: no meminfo.txt (take one with `tv.py backup`)")
+    snap, procs = parse_snapshot(mem.read_text(encoding="utf-8", errors="replace"))
+    def count(name):
+        f = d / name
+        return sum(1 for l in f.read_text(encoding="utf-8", errors="replace").splitlines()
+                   if l.startswith("package:")) if f.exists() else None
+    snap["packages_installed"] = count("packages_all.txt")
+    snap["packages_disabled"] = count("packages_disabled.txt")
+    return snap, procs
+
+
+def snapshot_live(s):
+    snap, procs = parse_snapshot(sh(s, SNAPSHOT_CMD, timeout=120))
+    snap["packages_installed"] = sum(1 for l in sh(s, "pm list packages").splitlines() if l.startswith("package:"))
+    snap["packages_disabled"] = sum(1 for l in sh(s, "pm list packages -d").splitlines() if l.startswith("package:"))
+    return snap, procs
+
+
+def cmd_report(a):
+    """Compare the very first backup with now (or with a later backup)."""
+    before, pb = snapshot_from_dir(a.before)
+    if a.after:
+        after, pa = snapshot_from_dir(a.after)
+    elif a.serial:
+        after, pa = snapshot_live(a.serial)
+    else:
+        sys.exit("give -s HOST:5555 (compare with the TV now) or --after DIR")
+    rows = {}
+    for k in before:
+        b, n = before.get(k), after.get(k)
+        row = {"before": b, "after": n}
+        if isinstance(b, int) and isinstance(n, int):
+            row["change"] = n - b
+        rows[k] = row
+    gone = sorted(((v, p) for p, v in pb.items() if p not in pa), reverse=True)
+    new = sorted(((v, p) for p, v in pa.items() if p not in pb), reverse=True)
+    emit({
+        "summary": rows,
+        "no_longer_running": [{"process": p, "pss_mb": v} for v, p in gone[:12]],
+        "newly_running": [{"process": p, "pss_mb": v} for v, p in new[:8]],
+        "note": "RAM numbers swing with whatever apps are open: compare with the same apps closed "
+                "(e.g. after `tv.py cleanup`). Storage: removing preinstalled apps only frees their updates and data.",
+    })
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -531,6 +683,17 @@ def main():
     p = add("play", cmd_play)
     p.add_argument("file")
     p.add_argument("--no-push", action="store_true", help="file already on the TV")
+    p = add("cleanup", cmd_cleanup)
+    p.add_argument("--stop", nargs="*", default=[], help="packages opened during testing to force-stop")
+    p.add_argument("--remove-vlc", action="store_true", help="uninstall VLC if it was installed for patterns")
+    p.add_argument("--disable-adb", action="store_true", help="turn debugging off as the very last step")
+    p.add_argument("--session-hours", type=float, default=48,
+                   help="also remove loose *.png/*.jpg/*.xml in /sdcard modified within this many hours")
+    p.add_argument("--yes", action="store_true", help="actually clean up (default is a dry run)")
+    p = add("report", cmd_report, serial=False)
+    p.add_argument("-s", "--serial", help="HOST:5555 - compare with the TV as it is now")
+    p.add_argument("--before", required=True, help="the first backup folder (taken before any change)")
+    p.add_argument("--after", help="a later backup folder instead of the live TV")
 
     a = ap.parse_args()
     a.fn(a)

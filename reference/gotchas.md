@@ -5,7 +5,14 @@ Connection
 - `unauthorized` = Allow prompt waiting on the TV. `offline` after standby = reconnect.
 - Opening Miracast/screen-sharing drops the TV off Wi-Fi ~20 s.
 - Shells: on Windows Git Bash rewrites `/sdcard/...` arguments to `C:/Program Files/Git/sdcard` - the Python
-  helpers avoid this; if using raw adb in Git Bash set `MSYS_NO_PATHCONV=1`.
+  helpers avoid this; if using raw adb in Git Bash set `MSYS_NO_PATHCONV=1`. (With that set, Windows paths for
+  `adb install/push` must be written `C:/...`, not `/c/...`.)
+- Wi-Fi adb goes `offline`/`device not found` every few minutes on some TVs even while awake: retry with
+  `adb disconnect` + `connect`, and for anything long (recordings, multi-step key sequences) push a script
+  and run it on the TV with `nohup`. `adb forward`/`reverse` are lost on every reconnect - re-create them.
+- MediaTek TVs print "Init wrapper sys mutex successful ..." on stdout before command output; raw
+  `adb exec-out screencap -p > x.png` files start with that text (strip everything before `\x89PNG`).
+  `tv.py shot` avoids it by saving on the TV and pulling.
 
 Packages
 - `pm uninstall -k --user 0` fully removes third-party (`/data/app`) apps - they only return from the Play
@@ -25,6 +32,13 @@ Settings that don't stick
   DNS, IME and other settings persist. Always re-check with `tv.py info` after the verification reboot and
   tell the owner if a setting reverts; re-applying may be needed after each restart.
 
+Leftovers
+- Ad-hoc `screencap -p /sdcard/<name>.png` calls pile up (21 files / 12 MB in one real session). Prefer
+  `tv.py shot` (always overwrites one file) and finish with `tv.py cleanup`, which also sweeps recent loose
+  *.png/*.xml from /sdcard.
+- Anything installed only for testing (VLC for patterns) and any setting toggled for an experiment must be
+  undone at the end; note them as you go.
+
 Screen & UI driving
 - uiautomator: Leanback slider *titles* report `focused="true"` even when not selected; only a node with
   `focusable="true"` is really focused (`tv.py ui` handles this).
@@ -38,6 +52,12 @@ Screen & UI driving
 - Leanback slider rows don't report focus in uiautomator - read values back after adjusting.
 - Option lists reset focus to the first item each time they open; step and verify, don't count blindly.
 - A 3-minute pattern ends and VLC exits mid-question - use the 30-minute versions.
+- `adb shell input keyevent` reaches apps but **not** accessibility services' key filters (and `sendevent`
+  is SELinux-blocked), so behaviour that depends on a real remote press (e.g. an accessibility overlay
+  reacting to keys) can only be tested with the physical remote. Multiple keycodes in one `input keyevent`
+  call still arrive ~1 s apart on slow TVs.
+- The UI layer is often 1920x1080 even on 4K panels (`wm size`, `dumpsys display` modes): menus and overlays
+  are upscaled 2x by the panel and look slightly soft; only video gets the 4K path. Not fixable in software.
 
 Picture/audio
 - Picture settings are per mode (and per HDR/DV signal); a mode may lock options (e.g. Colour Space).

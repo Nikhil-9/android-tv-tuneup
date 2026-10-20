@@ -109,7 +109,9 @@
     {"match": "com.hisense.fte", "label": "First-time setup", "action": "keep", "risk": "medium",
      "why": "Setup wizard; leave", "verified": ["Vu 65 GloLED"]},
     {"match": "com.hisense.uifac", "label": "Factory menu", "action": "keep", "risk": "medium",
-     "why": "Service/factory menu; leave", "verified": ["Vu 65 GloLED"]}
+     "why": "Service/factory menu; leave", "verified": ["Vu 65 GloLED"]},
+    {"match": "com.mstar.android.tv.disclaimercustomization", "label": "Legal disclaimer stub (MStar/MediaTek)", "action": "keep", "risk": "medium",
+     "why": "Shows as a tile in third-party launchers; hide it in the launcher instead of disabling a vendor system app", "verified": ["Vu 65 GloLED"]}
   ],
 
   "settings_recipes": {

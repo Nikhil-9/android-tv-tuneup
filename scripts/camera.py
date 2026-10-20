@@ -10,6 +10,7 @@ darkest near-black steps (sensor noise) - use the viewer's eyes or a colorimeter
   python camera.py lock HOST [--exposure-ms 20]  fixed ISO 100, daylight WB, manual shutter
   python camera.py shot HOST -o shot.jpg         grab a frame
   python camera.py ramp HOST                     RGB balance along the grey-ramp pattern (needs Pillow+numpy)
+  python camera.py release HOST                  back to auto exposure/white balance when done
 """
 import argparse
 import concurrent.futures
@@ -62,6 +63,16 @@ def cmd_lock(a):
     print(json.dumps({k: cur.get(k) for k in ("whitebalance", "manual_sensor", "iso", "exposure_ns", "frame_duration")}, indent=2))
 
 
+def cmd_release(a):
+    """Hand the phone camera back: automatic exposure and white balance."""
+    b = base(a.host)
+    for k, v in [("manual_sensor", "off"), ("whitebalance", "auto"), ("antibanding", "auto")]:
+        get(f"{b}/settings/{k}?set={v}")
+    cur = json.loads(get(f"{b}/status.json"))["curvals"]
+    print(json.dumps({k: cur.get(k) for k in ("manual_sensor", "whitebalance")}, indent=2))
+    print("Tell the owner they can now tap 'Stop' in IP Webcam (or uninstall it).", file=sys.stderr)
+
+
 def cmd_shot(a):
     data = get(f"{base(a.host)}/{'photo.jpg' if a.full else 'shot.jpg'}", timeout=20)
     open(a.out, "wb").write(data)
@@ -103,6 +114,7 @@ def main():
     p = sub.add_parser("shot"); p.add_argument("host"); p.add_argument("-o", "--out", default="shot.jpg")
     p.add_argument("--full", action="store_true", help="full-resolution photo instead of a video frame"); p.set_defaults(fn=cmd_shot)
     p = sub.add_parser("ramp"); p.add_argument("host"); p.set_defaults(fn=cmd_ramp)
+    p = sub.add_parser("release"); p.add_argument("host"); p.set_defaults(fn=cmd_release)
     a = ap.parse_args()
     a.fn(a)
 

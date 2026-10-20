@@ -16,6 +16,12 @@ What Claude does with it:
   really what's playing.
 - **Phone camera assist** (optional): with the free *IP Webcam* app, your Android phone becomes Claude's
   view of the screen.
+- **Before/after report**: RAM, storage, installed/disabled apps and which background processes no longer
+  run, compared with the backup taken before the first change.
+- **Clean-up**: at the end it removes everything it added for testing (pattern videos, screenshots, test
+  apps, temporary settings), trims caches and asks whether to turn debugging off.
+- **Extras**: frees storage where it actually can, recommended in-app settings (YouTube), and answers to the
+  usual questions (Alexa/voice control, air mice, a web browser for the TV).
 
 Claude asks what you want first and shows you the plan for each phase before changing anything. It keeps
 a backup, a change log and a rollback file.
@@ -23,7 +29,7 @@ a backup, a change log and a rollback file.
 ## Install
 
 ```bash
-git clone <this repo> ~/.claude/skills/android-tv-tuneup
+git clone https://github.com/Nikhil-9/android-tv-tuneup.git ~/.claude/skills/android-tv-tuneup
 ```
 On Windows, use the path `%USERPROFILE%\.claude\skills\android-tv-tuneup`. Then ask Claude Code something
 like *"debloat my Google TV"* or *"set up my TV and soundbar for the best picture and sound"*.
@@ -48,11 +54,12 @@ like *"debloat my Google TV"* or *"set up my TV and soundbar for the best pictur
 ```
 SKILL.md                    the workflow Claude follows
 reference/connect.md        enabling debugging, pairing, finding the TV
-reference/debloat.md        audit, plan, launcher swap, DNS
+reference/debloat.md        audit, plan, launcher swap, DNS, freeing storage
 reference/audio.md          eARC, passthrough, Atmos, soundbars
 reference/picture.md        modes, pattern calibration, HDR & Dolby Vision, camera
+reference/extras.md         app settings, voice/Alexa, air mice, browser, recording a demo
 reference/gotchas.md        pitfalls from real runs
-scripts/tv.py               discover/info/backup/audit/apply/rollback/ui/keys/playing
+scripts/tv.py               discover/info/backup/audit/apply/rollback/ui/keys/playing/cleanup/report
 scripts/gen_patterns.py     exact 10-bit SDR + HDR10 test patterns
 scripts/camera.py           IP Webcam helper (find, lock exposure/WB, shots, ramp tint)
 scripts/data/packages.json  package rules and settings recipes
